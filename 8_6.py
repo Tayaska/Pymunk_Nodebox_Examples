@@ -5,6 +5,7 @@ import pymunk
 import pymunk.pyglet_util
 import random, math
 import numpy as np
+import rl_agent # Q-навчання (власний модуль, лежить поруч)
 
 space = pymunk.Space()
 
@@ -110,6 +111,52 @@ def strategy2(b=s3.body):
         if R>180: # запобігти виїзду за межі
             b.angle=getAngle(x,y,350,250)
 
+# --- Удосконалена стратегія: Q-навчання з підкріпленням (rl_agent.py) ---
+agent = rl_agent.QAgent()
+agent.load() # продовжуємо навчання з файлу, якщо він є
+mem = {"d": None, "tr": None, "t": None, "score": 0, "n": 0}
+
+def strategy3(b=s3.body):
+    u"""Робот із правилом Q-навчання Q(s,a)+=alpha*(r+gamma*max Q(s',.)-Q(s,a)).
+    Стан: де мета (немає/зліва/спереду/справа), чи є в секторі антиоб'єкт, чи близько межа.
+    Дії: залишати, ліворуч, праворуч, випадковий кут. Винагорода: наближення до мети,
+    виштовхування мети до межі, очки, близькість антиоб'єкта, межа.
+    Вибір дії - epsilon-жадібний, epsilon зменшується. Q-таблиця зберігається у файл."""
+    v=100
+    a=b.angle
+    b.velocity=v*cos(a), v*sin(a)
+    x,y=b.position
+    R=getDist(x,y,350,250)
+    ellipse(x, y, 200, 200, stroke=Color(0.5))
+    H=rl_agent.HALF_ANGLE
+    line(x,y,x+100*cos(a+H),y+100*sin(a+H),stroke=Color(0.5))
+    line(x,y,x+100*cos(a-H),y+100*sin(a-H),stroke=Color(0.5))
+
+    if canvas.frame%10==0: # кожні 10 кадрів
+        t=tuple(s1.body.position)
+        anti=[tuple(s.body.position) for s in S2]
+        state=rl_agent.observe(x,y,a,t,anti)
+        d_now=getDist(x,y,*t)
+        tr_now=getDist(t[0],t[1],350,250)
+        if mem["t"] is None or getDist(t[0],t[1],*mem["t"])>60: # мету перенесено
+            mem["d"], mem["tr"] = d_now, tr_now
+        sd=s3.score-mem["score"] # зміна очок робота
+        mem["score"]=s3.score
+        dist_anti=min([getDist(x,y,*p) for p in anti] or [1e9])
+        last=agent.prev[1] if agent.prev else 0 # дія, що привела до цього стану
+        reward=rl_agent.reward_fn(mem["d"],d_now,dist_anti,sd,R>180,mem["tr"],tr_now,last)
+        mem["d"], mem["tr"], mem["t"] = d_now, tr_now, t
+        act=agent.step(state,reward) # навчання + вибір нової дії
+        b.angle=rl_agent.apply_action(b.angle,act)
+        mem["n"]+=1
+        if mem["n"]%200==0:
+            try: agent.save()
+            except IOError: pass
+        print state, rl_agent.ACTIONS[act], round(agent.eps,3)
+
+    if R>180: # запобігти виїзду за межі
+        b.angle=getAngle(x,y,350,250)
+
 def scr(s,s0,s3,p=1):
     bx,by=s.body.position
     s0x,s0y=s0.body.position
@@ -160,7 +207,7 @@ def draw(canvas):
     nofill()
     ellipse(350, 250, 350, 350, stroke=Color(0))
     manualControl()
-    strategy2()
+    strategy3()
     score()
     simFriction()
     space.step(0.02)
